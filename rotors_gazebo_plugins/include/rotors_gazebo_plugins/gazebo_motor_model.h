@@ -67,6 +67,7 @@ static constexpr double kDefaultTimeConstantUp = 1.0 / 80.0;
 static constexpr double kDefaultTimeConstantDown = 1.0 / 40.0;
 static constexpr double kDefaulMaxRotVelocity = 838.0;
 static constexpr double kDefaultRotorDragCoefficient = 1.0e-4;
+static constexpr double kDefaultRotorDragAngleCoefficient = 0.0;  // turned off by default
 static constexpr double kDefaultRollingMomentCoefficient = 1.0e-6;
 
 class GazeboMotorModel : public MotorModel, public ModelPlugin {
@@ -93,6 +94,7 @@ class GazeboMotorModel : public MotorModel, public ModelPlugin {
         ref_motor_input_(0.0),
         rolling_moment_coefficient_(kDefaultRollingMomentCoefficient),
         rotor_drag_coefficient_(kDefaultRotorDragCoefficient),
+        rotor_drag_angle_coefficient_(kDefaultRotorDragAngleCoefficient),
         rotor_velocity_slowdown_sim_(kDefaultRotorVelocitySlowdownSim),
         time_constant_down_(kDefaultTimeConstantDown),
         time_constant_up_(kDefaultTimeConstantUp),
@@ -128,6 +130,7 @@ class GazeboMotorModel : public MotorModel, public ModelPlugin {
   std::string wind_speed_sub_topic_;
   std::string joint_name_;
   std::string link_name_;
+  std::string base_link_name_;
   std::string motor_speed_pub_topic_;
   std::string motor_position_pub_topic_;
   std::string motor_force_pub_topic_;
@@ -148,6 +151,7 @@ class GazeboMotorModel : public MotorModel, public ModelPlugin {
   double ref_motor_input_;
   double rolling_moment_coefficient_;
   double rotor_drag_coefficient_;
+  double rotor_drag_angle_coefficient_;
   double rotor_velocity_slowdown_sim_;
   double time_constant_down_;
   double time_constant_up_;
@@ -169,6 +173,7 @@ class GazeboMotorModel : public MotorModel, public ModelPlugin {
   physics::ModelPtr model_;
   physics::JointPtr joint_;
   physics::LinkPtr link_;
+  physics::LinkPtr base_link_;
 
   /// \brief Pointer to the update event connection.
   event::ConnectionPtr updateConnection_;

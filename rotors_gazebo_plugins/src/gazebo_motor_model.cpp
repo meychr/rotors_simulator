@@ -87,6 +87,12 @@ void GazeboMotorModel::Load(physics::ModelPtr _model, sdf::ElementPtr _sdf) {
     gzthrow(
         "[gazebo_motor_model] Couldn't find specified link \"" << link_name_
                                                                << "\".");
+  base_link_name_ = "base_link";
+  base_link_ = model_->GetLink(base_link_name_);
+  if (base_link_ == NULL)
+    gzthrow(
+      "[gazebo_motor_model] Couldn't find specified base_link \"" << base_link_name_
+                                                             << "\".");
 
   if (_sdf->HasElement("motorNumber"))
     motor_number_ = _sdf->GetElement("motorNumber")->Get<int>();
@@ -181,6 +187,9 @@ void GazeboMotorModel::Load(physics::ModelPtr _model, sdf::ElementPtr _sdf) {
   getSdfParam<double>(
       _sdf, "rotorDragCoefficient", rotor_drag_coefficient_,
       rotor_drag_coefficient_);
+  getSdfParam<double>(
+    _sdf, "rotorDragAngleCoefficient", rotor_drag_angle_coefficient_,
+    rotor_drag_angle_coefficient_);
   getSdfParam<double>(
       _sdf, "rollingMomentCoefficient", rolling_moment_coefficient_,
       rolling_moment_coefficient_);
@@ -449,6 +458,66 @@ void GazeboMotorModel::UpdateForcesAndMoments() {
 
       // Apply air_drag to link.
       link_->AddForce(air_drag);
+
+      /***********************************************/
+      /* Synthetic configuration dependent force term */
+      /***********************************************/
+      std::string joint_servo_name = "joint" + std::to_string(motor_number_);
+      physics::JointPtr joint_servo = this->model_->GetJoint(joint_servo_name);
+      if (joint_servo == NULL)
+        gzthrow(
+          "[gazebo_motor_model] Couldn't find specified joint \"" << joint_servo_name
+                                                                  << "\".");
+      const double servo_angle = joint_servo->Position(0);
+      const double servo_angle_bounded = std::max(std::min(1.57, servo_angle), 0.0);
+
+      ignition::math::Vector3d synthetic_drag_force_body(0.0, 0.0, 0.0);
+      ignition::math::Vector3d scale_factor_body(0.0, 0.0, 0.0);
+
+      // Debug input (constant) => combined with servo_angle_trackbar to change servo angles, turn off AddRelativeForce()
+      // const double _real_motor_velocity = 400.0;
+      // ignition::math::Vector3d _body_velocity_perpendicular(1.0, 1.0, 0.0);
+
+      // Transform  body_velocity_perpendicular in body frame
+      ignition::math::Pose3d pose_link = base_link_->WorldCoGPose();
+      ignition::math::Vector3d body_velocity_perpendicular_body = pose_link.Rot().RotateVectorReverse(body_velocity_perpendicular);
+
+      if(motor_number_ == 0 || motor_number_ == 2){
+        scale_factor_body = ignition::math::Vector3d(servo_angle_bounded, 1.57 - servo_angle_bounded, 0.0);
+        synthetic_drag_force_body = -400.0*rotor_drag_angle_coefficient_ *
+                                scale_factor_body *
+                                body_velocity_perpendicular_body;
+      }
+      if(motor_number_ == 1 || motor_number_ == 3){
+        scale_factor_body = ignition::math::Vector3d(1.57 - servo_angle_bounded, servo_angle_bounded, 0.0);
+        synthetic_drag_force_body  = -400.0*rotor_drag_angle_coefficient_ *
+                                scale_factor_body *
+                                body_velocity_perpendicular_body;
+      }
+      // Add force to base_link s.t. no torques are induced, only forces
+      base_link_->AddRelativeForce(synthetic_drag_force_body);
+
+      // Debug output for only one motor
+      if(motor_number_ == 1) {
+        gzdbg << "Orient: " << pose_link.Rot().Euler().X() << ", " << pose_link.Rot().Euler().Y() << ", "
+              << pose_link.Rot().Euler().Z() << std::endl;
+        gzdbg << "body vel: " << body_velocity_perpendicular.X() << ", " << body_velocity_perpendicular.Y() << ", "
+              << body_velocity_perpendicular.Z() << std::endl;
+        gzdbg << "body vel body reverse: " << body_velocity_perpendicular_body.X() << ", " << body_velocity_perpendicular_body.Y() << ", "
+              << body_velocity_perpendicular_body.Z() << std::endl;
+        gzdbg << "forces: " << std::to_string(synthetic_drag_force_body.X()) << ", " << std::to_string(synthetic_drag_force_body.Y()) << ", "
+              << std::to_string(synthetic_drag_force_body.Z()) << std::endl;
+      }
+
+      // Debug output for all motors
+      //gzdbg <<       motor_number_       << " has angle " << servo_angle_bounded << std::endl;
+      // gzdbg <<       "coeff: " << std::to_string(rotor_drag_angle_coefficient_)   << std::endl;
+      //gzdbg << "scale: " << scale_factor_body.X() << ", " << scale_factor_body.Y() << ", " << scale_factor_body.Z() << std::endl;
+      //gzdbg << "scale: " << scale_factor_world.X() << ", " << scale_factor_world.Y() << ", " << scale_factor_world.Z() << std::endl;
+      // gzdbg << "body vel: " << body_velocity_perpendicular.X() << ", " << body_velocity_perpendicular.Y() << ", " << body_velocity_perpendicular.Z() << std::endl;
+      // gzdbg << "forces: " << std::to_string(synthetic_drag_force.X()) << ", " << std::to_string(synthetic_drag_force.Y()) << ", " << std::to_string(synthetic_drag_force.Z()) << std::endl;
+
+
       // Moments get the parent link, such that the resulting torques can be
       // applied.
       physics::Link_V parent_links = link_->GetParentJointsLinks();
