@@ -459,45 +459,66 @@ void GazeboMotorModel::UpdateForcesAndMoments() {
       // Apply air_drag to link.
       link_->AddForce(air_drag);
 
-      /***********************************************/
-      /* Synthetic configuration dependent force term */
-      /***********************************************/
+      /***********************************************
+       * Start synthetic drag force model
+       ***********************************************/
+      /*
+       * Synthetic configuration dependent force term.
+       * The synthetic force is introduced to simulate a kind of body drag. It is based one the assumption that
+       * body drag is significant and changes depending on the configuration. Here we use a very simple model
+       * that assumes that the forces depend linearly on the linear velocities along body x and y axis in the
+       * body frame scaled by a constant.
+       * Ideally this model could be integrated or added as a plugin to foldable_drone_simulation pkg
+       * see foldable_drone_simulation/src/foldable_drone_joints_controller.cpp
+      */
       std::string joint_servo_name = "joint" + std::to_string(motor_number_);
       physics::JointPtr joint_servo = this->model_->GetJoint(joint_servo_name);
       if (joint_servo == NULL)
         gzthrow(
           "[gazebo_motor_model] Couldn't find specified joint \"" << joint_servo_name
                                                                   << "\".");
+      // Get joint angle and limit it to the relevant range (here 0 to 90 for simplicity)
       const double servo_angle = joint_servo->Position(0);
       const double servo_angle_bounded = std::max(std::min(1.57, servo_angle), 0.0);
 
+      // Init vectors
       ignition::math::Vector3d synthetic_drag_force_body(0.0, 0.0, 0.0);
       ignition::math::Vector3d scale_factor_body(0.0, 0.0, 0.0);
 
-      // Debug input (constant) => combined with servo_angle_trackbar to change servo angles, turn off AddRelativeForce()
+      // Debug input for testing (constant) => combined with servo_angle_trackbar to change servo angles, turn off AddRelativeForce()
       // const double _real_motor_velocity = 400.0;
       // ignition::math::Vector3d _body_velocity_perpendicular(1.0, 1.0, 0.0);
 
-      // Transform  body_velocity_perpendicular in body frame
+      // Transform  body_velocity_perpendicular from world in body frame
       ignition::math::Pose3d pose_link = base_link_->WorldCoGPose();
       ignition::math::Vector3d body_velocity_perpendicular_body = pose_link.Rot().RotateVectorReverse(body_velocity_perpendicular);
 
+      // Actual synthetic force model (can be changed as needed, goal would be to also have a nonlinear one wrt to servo_angle_i,
+      // it could also be extended to a wider range of angles)
+      // drag_force_x = [servo_angle_0 + (1.57 - servo_angle_1) + servo_angle_2 + (1.57 - servo_angle_3)]
+      //                  * kAvgMotorSpeed * rotor_drag_angle_coefficient_ * body_velocity_perpendicular_body_x
+      // drag_force_y = [(1.57 - servo_angle_0) + servo_angle_1 + (1.57 - servo_angle_2) + servo_angle_3]
+      //                  * kAvgMotorSpeed * rotor_drag_angle_coefficient_ * body_velocity_perpendicular_body_y
+      // drag_force_z = 0
+
+      const double kAvgMotorSpeed = 400.0;  // constant factor to be able to use coefficients of same order of magnitude as for rotor drag
+
       if(motor_number_ == 0 || motor_number_ == 2){
         scale_factor_body = ignition::math::Vector3d(servo_angle_bounded, 1.57 - servo_angle_bounded, 0.0);
-        synthetic_drag_force_body = -400.0*rotor_drag_angle_coefficient_ *
+        synthetic_drag_force_body = -kAvgMotorSpeed*rotor_drag_angle_coefficient_ *
                                 scale_factor_body *
                                 body_velocity_perpendicular_body;
       }
       if(motor_number_ == 1 || motor_number_ == 3){
         scale_factor_body = ignition::math::Vector3d(1.57 - servo_angle_bounded, servo_angle_bounded, 0.0);
-        synthetic_drag_force_body  = -400.0*rotor_drag_angle_coefficient_ *
+        synthetic_drag_force_body  = -kAvgMotorSpeed*rotor_drag_angle_coefficient_ *
                                 scale_factor_body *
                                 body_velocity_perpendicular_body;
       }
       // Add force to base_link s.t. no torques are induced, only forces
       base_link_->AddRelativeForce(synthetic_drag_force_body);
 
-      // Debug output for only one motor
+      // Debug output for only one motor (activate gzdbg output by setting arg verbose=True in launch file)
       if(motor_number_ == 1) {
         gzdbg << "Orient: " << pose_link.Rot().Euler().X() << ", " << pose_link.Rot().Euler().Y() << ", "
               << pose_link.Rot().Euler().Z() << std::endl;
@@ -509,14 +530,17 @@ void GazeboMotorModel::UpdateForcesAndMoments() {
               << std::to_string(synthetic_drag_force_body.Z()) << std::endl;
       }
 
-      // Debug output for all motors
-      //gzdbg <<       motor_number_       << " has angle " << servo_angle_bounded << std::endl;
-      // gzdbg <<       "coeff: " << std::to_string(rotor_drag_angle_coefficient_)   << std::endl;
-      //gzdbg << "scale: " << scale_factor_body.X() << ", " << scale_factor_body.Y() << ", " << scale_factor_body.Z() << std::endl;
-      //gzdbg << "scale: " << scale_factor_world.X() << ", " << scale_factor_world.Y() << ", " << scale_factor_world.Z() << std::endl;
+      // Debug output for all motors (activate gzdbg output by setting arg verbose=True in launch file)
+      // gzdbg << motor_number_ << " has angle " << servo_angle_bounded << std::endl;
+      // gzdbg << "coeff: " << std::to_string(rotor_drag_angle_coefficient_)   << std::endl;
+      // gzdbg << "scale: " << scale_factor_body.X() << ", " << scale_factor_body.Y() << ", " << scale_factor_body.Z() << std::endl;
+      // gzdbg << "scale: " << scale_factor_world.X() << ", " << scale_factor_world.Y() << ", " << scale_factor_world.Z() << std::endl;
       // gzdbg << "body vel: " << body_velocity_perpendicular.X() << ", " << body_velocity_perpendicular.Y() << ", " << body_velocity_perpendicular.Z() << std::endl;
       // gzdbg << "forces: " << std::to_string(synthetic_drag_force.X()) << ", " << std::to_string(synthetic_drag_force.Y()) << ", " << std::to_string(synthetic_drag_force.Z()) << std::endl;
 
+      /*********************************************
+       * End of synthetic drag force model
+       *********************************************/
 
       // Moments get the parent link, such that the resulting torques can be
       // applied.
